@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>00:00:00 - 0 KB/s : 0 KB/s</title>
+    <style>
+        :root {
+            --bg-color: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-main: #111827;
+            --text-sub: #6b7280;
+            --accent: #0284c7;
+            --border: #e5e7eb;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #0f172a;
+                --card-bg: #1e293b;
+                --text-main: #f8fafc;
+                --text-sub: #94a3b8;
+                --border: #334155;
+            }
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            max-width: 850px;
+            width: 100%;
+        }
+
+        header {
+            margin-bottom: 28px;
+            text-align: center;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px 20px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            text-align: center;
+        }
+
+        .card-label {
+            font-size: 0.85rem;
+            color: var(--text-sub);
+            margin-bottom: 10px;
+        }
+
+        .card-value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1>The Huawei B312-926 4G LTE Router</h1>
+        </header>
+
+        <div class="metrics-grid">
+            <div class="card">
+                <div class="card-label">Current Download Speed</div>
+                <div class="card-value" id="dl-speed">0 KB/s</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Current Upload Speed</div>
+                <div class="card-value" id="ul-speed">0 KB/s</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Session Usage</div>
+                <div class="card-value" id="today-usage">0.0 MB</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ROUTER_IP = 'http://192.168.8.1';
+        const tabStartTime = Date.now();
+
+        let initialTotalUsage = null;
+        let lastUlFormatted = '0 KB/s';
+        let lastDlFormatted = '0 KB/s';
+
+        function parseXml(xmlString) {
+            const parser = new DOMParser();
+            return parser.parseFromString(xmlString, "text/xml");
+        }
+
+        function getXmlValue(xmlDoc, tagName) {
+            let el = xmlDoc.getElementsByTagName(tagName)[0];
+            if (!el) el = xmlDoc.getElementsByTagName(tagName.toLowerCase())[0];
+            return el ? el.textContent.trim() : null;
+        }
+
+        function formatBytes(bytes) {
+            bytes = parseInt(bytes) || 0;
+            const megabytes = bytes / (1024 * 1024);
+            if (megabytes < 1024) {
+                return megabytes.toFixed(1) + ' MB';
+            } else {
+                return (megabytes / 1024).toFixed(2) + ' GB';
+            }
+        }
+
+        function formatSpeed(bytesPerSec) {
+            bytesPerSec = parseInt(bytesPerSec) || 0;
+            if (bytesPerSec < 512) return '0 KB/s';
+            const kbps = bytesPerSec / 1024;
+            if (kbps >= 1000) {
+                return (bytesPerSec / (1024 * 1024)).toFixed(1) + ' MB/s';
+            }
+            return Math.round(kbps) + ' KB/s';
+        }
+
+        function getTabOpenedTime() {
+            const elapsedSeconds = Math.floor((Date.now() - tabStartTime) / 1000);
+            const hrs = String(Math.floor(elapsedSeconds / 3600)).padStart(2, '0');
+            const mins = String(Math.floor((elapsedSeconds % 3600) / 60)).padStart(2, '0');
+            const secs = String(elapsedSeconds % 60).padStart(2, '0');
+            return `${hrs}:${mins}:${secs}`;
+        }
+
+        // Dedicated clock loop that updates every 1 second without jitter
+        function updateTabTitle() {
+            document.title = `${getTabOpenedTime()} - ${lastUlFormatted} : ${lastDlFormatted}`;
+        }
+
+        async function fetchRouterData() {
+            try {
+                const trafficRes = await fetch(`${ROUTER_IP}/api/monitoring/traffic-statistics`);
+                const trafficText = await trafficRes.text();
+                const trafficXml = parseXml(trafficText);
+
+                let dlSpeed = parseInt(getXmlValue(trafficXml, 'CurrentDownloadRate') || 0);
+                let ulSpeed = parseInt(getXmlValue(trafficXml, 'CurrentUploadRate') || 0);
+
+                let currentDownload = parseInt(getXmlValue(trafficXml, 'CurrentDownload') || 0);
+                let currentUpload = parseInt(getXmlValue(trafficXml, 'CurrentUpload') || 0);
+                let currentTotalUsage = currentDownload + currentUpload;
+
+                if (initialTotalUsage === null && currentTotalUsage >= 0) {
+                    initialTotalUsage = currentTotalUsage;
+                }
+
+                let tabUsageBytes = 0;
+                if (initialTotalUsage !== null) {
+                    tabUsageBytes = Math.max(0, currentTotalUsage - initialTotalUsage);
+                }
+
+                // Cache formatted speeds for smooth title updates
+                lastDlFormatted = formatSpeed(dlSpeed);
+                lastUlFormatted = formatSpeed(ulSpeed);
+
+                // Update UI Cards
+                document.getElementById('dl-speed').innerText = lastDlFormatted;
+                document.getElementById('ul-speed').innerText = lastUlFormatted;
+                document.getElementById('today-usage').innerText = formatBytes(tabUsageBytes);
+
+                // Trigger immediate title update when new data arrives
+                updateTabTitle();
+            } catch (err) {
+                console.error("Traffic statistics sync error:", err);
+            }
+        }
+
+        // 1. Smooth 1-second clock timer
+        setInterval(updateTabTitle, 1000);
+
+        // 2. Network data polling every 2 seconds
+        setInterval(fetchRouterData, 2000);
+        fetchRouterData();
+    </script>
+</body>
+
+</html>
